@@ -1,6 +1,8 @@
 import { Link } from 'react-router-dom';
 import Seo from '../components/Seo.jsx';
 import ServiceIcon from '../components/ServiceIcon.jsx';
+import ArchDiagram from '../components/ArchDiagram.jsx';
+import { Reveal } from '../components/motion/Reveal.jsx';
 import { useContent } from '../api.js';
 
 const steps = ['Discuss your goals', 'Plan and quote', 'Build or install', 'Support and improve'];
@@ -9,6 +11,51 @@ const faqs = [
   ['Do you offer support after delivery?', 'Yes. Every project includes a support period, with monthly plans after that.'],
   ['Can I combine services?', 'Yes. Most clients pair software or data work with AI marketing.'],
 ];
+
+// Detailed summary for each service, matched by slug. Edit the wording here whenever you need.
+// TODO: CATVORA to confirm the timelines before launch.
+const details = {
+  software: {
+    overview: 'We design and build web apps, business websites and internal tools around the way your team actually works. Instead of forcing you into off-the-shelf software, we build only what you need, in short steps you can review, so you see progress early and avoid surprises.',
+    audience: 'Businesses that have outgrown spreadsheets, need a customer-facing website or app, or want to automate repeated manual work.',
+    included: ['Business website or web app', 'Admin panel to manage your own content', 'Customer logins, forms and payments where needed', 'Mobile-friendly design', 'Hosting, domain and SSL setup', 'Handover with training and documentation'],
+    outcomes: ['A product built for your workflow, not a generic template', 'Less manual work for your team', 'A site or app you can update yourself', 'Support from the same team that built it'],
+    timeline: '4 to 12 weeks',
+    tech: 'Typically built with React, Node.js and MongoDB',
+  },
+  networking: {
+    overview: 'We plan, install and secure the network your business depends on: office Wi-Fi, wired connections, firewalls and remote access. A good network is invisible when it works, so we focus on coverage, speed and security, and on fixing weak spots before they cause downtime.',
+    audience: 'Offices, shops, clinics and growing teams with slow Wi-Fi, dead zones, frequent drops or no proper security.',
+    included: ['Site survey and coverage plan', 'Wired and wireless network design', 'Firewall, user access and guest Wi-Fi setup', 'Secure remote access for staff', 'Backup internet line options', 'Monitoring and support plans'],
+    outcomes: ['Stable Wi-Fi in every room you use', 'Faster, more reliable internet for your team', 'Protection from common security risks', 'A network diagram and credentials handed over to you'],
+    timeline: '1 to 3 weeks',
+    tech: 'Business-grade routers, switches, access points and firewalls',
+  },
+  hardware: {
+    overview: 'We help you choose, supply and install the right routers, switches, access points and cabling, with clear prices and no unnecessary extras. We give vendor-neutral advice, fit everything neatly on site and test it before we leave.',
+    audience: 'Businesses setting up a new office, replacing old equipment, or expanding to more users or locations.',
+    included: ['Requirement check and product advice', 'Clear quote with brand and model options', 'Supply and delivery', 'Structured cabling and rack setup', 'Installation, labelling and testing', 'Warranty and replacement support'],
+    outcomes: ['Equipment matched to your users and budget', 'A neat, labelled installation', 'Warranty paperwork and a full device list', 'One contact for any hardware issue'],
+    timeline: '1 to 2 weeks, depending on delivery',
+    tech: 'Routers, switches, access points, cabling and racks from trusted brands',
+  },
+  'ai-data': {
+    overview: 'We turn the data you already have in sheets, apps and systems into clear dashboards, reports and predictions. We start with the questions you want answered, clean the data so it can be trusted, and connect the results to your daily tools so your team actually uses them.',
+    audience: 'Businesses with sales, customer or operations data that sits unused, or managers who make decisions without clear numbers.',
+    included: ['Data collection from sheets, apps and systems', 'Cleaning and organising', 'Dashboards and automated reports', 'Forecasts such as sales or demand', 'Alerts when numbers move unexpectedly', 'Team training on reading the results'],
+    outcomes: ['One place to see how your business is doing', 'Fewer hours spent on manual reports', 'Early signs of trends and problems', 'Decisions based on data instead of guesses'],
+    timeline: '3 to 8 weeks',
+    tech: 'Dashboards and models connected to your existing tools',
+  },
+  'ai-marketing': {
+    overview: 'We replace guesswork with data. We study your customers and past results, choose the channels and messages most likely to work, run the campaigns and report openly on what brings leads and what wastes budget. Spending then moves to what works.',
+    audience: 'Businesses that spend on ads or social media without clear results, or want a steady flow of enquiries online.',
+    included: ['Audit of brand, website and past campaigns', 'Audience and channel strategy', 'Ads, posts, landing pages and email content', 'Campaign setup with tracking from day one', 'Monthly reports in plain language', 'Ongoing testing and budget optimisation'],
+    outcomes: ['More qualified enquiries', 'A lower cost for each lead over time', 'Clear reports on what you spent and what it earned', 'A marketing plan that improves each month'],
+    timeline: 'Setup in 2 to 4 weeks, with results building over 2 to 3 months',
+    tech: 'Google Analytics 4, Meta Pixel and ad platform data',
+  },
+};
 
 // Workflow for each domain. Edit the steps here whenever you need.
 const flows = {
@@ -65,42 +112,142 @@ const pickFlow = (title = '') => {
   return flows.generic;
 };
 
+const Eyebrow = ({ children }) => (
+  <span className="inline-block rounded-full bg-peach px-3 py-1 text-xs font-semibold tracking-wide">{children}</span>
+);
+
+const Check = ({ items }) => (
+  <ul className="mt-3 space-y-2">
+    {items.map((x) => (
+      <li key={x} className="flex gap-3"><span className="mt-0.5 grid h-5 w-5 shrink-0 place-items-center rounded-full bg-peach text-xs font-bold">✓</span><span>{x}</span></li>
+    ))}
+  </ul>
+);
+
 export default function Services() {
   const { services } = useContent();
   return (
     <div className="pt-24">
       <Seo title="Services" desc="Software, networking, network hardware, AI data and AI-driven marketing services from CATVORA Technology." />
-      <section className="mx-auto max-w-6xl px-5 py-12">
-        <h1 className="text-4xl font-extrabold sm:text-5xl">Our services</h1>
-        {services.map((s) => (
-          <article key={s._id} id={s.slug} className="grid scroll-mt-24 gap-6 border-b border-ink/15 py-12 md:grid-cols-2">
-            <div><span className="text-cobalt"><ServiceIcon name={s.icon} size={36} /></span><h2 className="mt-3 text-3xl font-bold">{s.title}</h2><p className="mt-3 max-w-md text-ink/70">{s.summary}</p></div>
-            <div><ul className="space-y-2">{s.benefits?.map((b) => <li key={b} className="flex gap-2"><span className="text-mint">✓</span>{b}</li>)}</ul>
-              <Link to={`/contact?service=${encodeURIComponent(s.title)}`} className="btn mt-6">Request a quote</Link></div>
 
-            {/* Workflow of this service */}
-            <div className="md:col-span-2">
-              <h3 className="text-xl font-bold">How this service works</h3>
-              <ol className="mt-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-                {pickFlow(s.title).map(([t, d], i) => (
-                  <li key={t} className="rounded-2xl border border-ink/10 bg-white p-5">
-                    <span className="font-display text-2xl font-extrabold text-cobalt">{String(i + 1).padStart(2, '0')}</span>
-                    <p className="mt-1 font-bold">{t}</p>
-                    {d && <p className="mt-1 text-sm text-ink/70">{d}</p>}
-                  </li>
-                ))}
-              </ol>
-            </div>
-          </article>
-        ))}
+      {/* Page intro with quick links */}
+      <section className="mx-auto max-w-6xl px-5 pb-6 pt-10">
+        <Reveal>
+          <Eyebrow>Services</Eyebrow>
+          <h1 className="mt-3 text-4xl sm:text-5xl">Our services</h1>
+          <p className="mt-4 max-w-2xl text-lg text-ink/70">
+            Here is what each service covers, what is included, who it suits, how a project runs from the first call to support, and how it is built.
+          </p>
+          <div className="mt-6 flex flex-wrap gap-2">
+            {services.map((s) => (
+              <a key={s._id} href={`#${s.slug}`} className="rounded-full border border-ink/15 bg-white px-4 py-2 text-sm font-medium transition hover:border-pline hover:bg-peach">{s.title}</a>
+            ))}
+          </div>
+        </Reveal>
       </section>
-      <section className="bg-white px-5 py-16"><div className="mx-auto max-w-6xl">
-        <h2 className="text-3xl font-extrabold">How we work</h2>
-        <ol className="mt-8 grid gap-6 md:grid-cols-4">{steps.map((s, i) => <li key={s}><span className="font-display text-3xl font-extrabold text-cobalt">{i + 1}</span><p className="mt-1 font-bold">{s}</p></li>)}</ol>
-      </div></section>
+
+      {/* One detailed card per service */}
+      <section className="mx-auto max-w-6xl space-y-8 px-5 py-10">
+        {services.map((s) => {
+          const d = details[s.slug];
+          return (
+            <Reveal key={s._id}>
+              <article id={s.slug} className="scroll-mt-24 rounded-[2rem] bg-leaf p-6 md:p-10">
+                {/* header */}
+                <div className="flex flex-wrap items-start justify-between gap-4">
+                  <div className="flex items-start gap-4">
+                    <span className="grid h-14 w-14 shrink-0 place-items-center rounded-2xl bg-peach"><ServiceIcon name={s.icon} size={26} /></span>
+                    <div>
+                      <h2 className="text-3xl sm:text-4xl">{s.title}</h2>
+                      <p className="mt-2 max-w-xl text-lg text-ink/70">{s.summary}</p>
+                    </div>
+                  </div>
+                  {d?.timeline && (
+                    <div className="rounded-2xl bg-white px-5 py-3 text-sm">
+                      <span className="block text-ink/60">Typical timeline</span>
+                      <span className="font-semibold">{d.timeline}</span>
+                    </div>
+                  )}
+                </div>
+
+                {s.benefits?.length > 0 && (
+                  <div className="mt-5 flex flex-wrap gap-2">
+                    {s.benefits.map((b) => <span key={b} className="rounded-full border border-pline bg-peach px-3 py-1 text-sm font-medium">{b}</span>)}
+                  </div>
+                )}
+
+                {/* detailed summary */}
+                {d && (
+                  <div className="mt-8 grid gap-5 md:grid-cols-2">
+                    <div className="rounded-3xl bg-white p-6">
+                      <h3 className="text-xl">Overview</h3>
+                      <p className="mt-2 text-ink/75">{d.overview}</p>
+                      <h3 className="mt-6 text-xl">Who it is for</h3>
+                      <p className="mt-2 text-ink/75">{d.audience}</p>
+                      {d.tech && <p className="mt-6 text-sm text-ink/60"><b className="text-ink">Built with:</b> {d.tech}</p>}
+                    </div>
+                    <div className="space-y-5">
+                      <div className="rounded-3xl bg-white p-6">
+                        <h3 className="text-xl">What is included</h3>
+                        <Check items={d.included} />
+                      </div>
+                      <div className="rounded-3xl bg-white p-6">
+                        <h3 className="text-xl">What you get</h3>
+                        <Check items={d.outcomes} />
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Workflow of this service */}
+                <div className="mt-8">
+                  <h3 className="text-2xl">How this service works</h3>
+                  <ol className="mt-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                    {pickFlow(s.title).map(([t, desc], i) => (
+                      <li key={t} className="rounded-2xl bg-white p-5 transition duration-300 hover:-translate-y-1 hover:shadow-lg">
+                        <span className="font-display text-2xl font-semibold text-[#E9A57C]">{String(i + 1).padStart(2, '0')}</span>
+                        <p className="mt-1 font-semibold">{t}</p>
+                        {desc && <p className="mt-1 text-sm text-ink/70">{desc}</p>}
+                      </li>
+                    ))}
+                  </ol>
+                </div>
+
+                {/* Architecture diagram at the end of each service */}
+                <div className="mt-8"><ArchDiagram slug={s.slug} /></div>
+
+                <div className="mt-8 flex flex-wrap gap-3">
+                  <Link to={`/contact?service=${encodeURIComponent(s.title)}`} className="btn">Request a quote</Link>
+                  <button className="btn-ghost" onClick={() => window.dispatchEvent(new Event('open-booking'))}>Book a call</button>
+                </div>
+              </article>
+            </Reveal>
+          );
+        })}
+      </section>
+
+      <section className="bg-mist px-5 py-16">
+        <div className="mx-auto max-w-6xl">
+          <h2 className="text-3xl sm:text-4xl">How we work</h2>
+          <ol className="mt-8 grid gap-5 md:grid-cols-4">
+            {steps.map((s, i) => (
+              <li key={s} className="rounded-3xl bg-leaf p-6">
+                <span className="font-display text-3xl font-semibold text-[#E9A57C]">{i + 1}</span>
+                <p className="mt-1 font-semibold">{s}</p>
+              </li>
+            ))}
+          </ol>
+        </div>
+      </section>
+
       <section className="mx-auto max-w-3xl px-5 py-16">
-        <h2 className="text-3xl font-extrabold">Questions</h2>
-        {faqs.map(([q, a]) => <details key={q} className="border-b border-ink/15 py-4"><summary className="cursor-pointer font-bold">{q}</summary><p className="mt-2 text-ink/70">{a}</p></details>)}
+        <h2 className="text-3xl sm:text-4xl">Questions</h2>
+        {faqs.map(([q, a]) => (
+          <details key={q} className="border-b border-ink/15 py-4">
+            <summary className="cursor-pointer font-semibold">{q}</summary>
+            <p className="mt-2 text-ink/70">{a}</p>
+          </details>
+        ))}
       </section>
     </div>
   );
