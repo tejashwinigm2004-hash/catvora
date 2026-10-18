@@ -5,11 +5,13 @@ import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
 import multer from 'multer';
 import { v2 as cloudinary } from 'cloudinary';
-import { Admin, Lead, Booking, Ad, Service, Member } from './models.js';
+import { Admin, User, Lead, Booking, Ad, Service, Member } from './models.js';
 import { notify } from './mail.js';
-
+console.log('routes.js: user routes loaded');
 const r = Router();
 const strict = rateLimit({ windowMs: 15 * 60 * 1000, limit: 10 });
+// separate limiter for customer sign in / register, so it does not use up the quota of forms
+const authLimit = rateLimit({ windowMs: 15 * 60 * 1000, limit: 20 });
 const check = (req, res, next) => {
   const e = validationResult(req);
   return e.isEmpty() ? next() : res.status(422).json({ message: e.array()[0].msg });
@@ -17,21 +19,76 @@ const check = (req, res, next) => {
 const wrap = (fn) => (q, s, n) => fn(q, s, n).catch(n);
 
 // ---------- auth ----------
-const auth = (req, res, next) => {
-  try { req.admin = jwt.verify(req.cookies.token, process.env.JWT_SECRET); next(); }
-  catch { res.status(401).json({ message: 'Please sign in' }); }
-};
 const prod = process.env.NODE_ENV === 'production';
+const cookieOpts = { httpOnly: true, secure: prod, sameSite: prod ? 'none' : 'lax' };
+
+// Admin only: the token must carry role "admin", so a customer token can never open /admin routes
+const auth = (req, res, next) => {
+  try {
+    const p = jwt.verify(req.cookies.token, process.env.JWT_SECRET);
+    if (p.role !== 'admin') throw new Error('not admin');
+    req.admin = p;
+    next();
+  } catch { res.status(401).json({ message: 'Please sign in' }); }
+};
 r.post('/auth/login', strict, wrap(async (q, s) => {
   const a = await Admin.findOne({ email: q.body.email });
   if (!a || !(await bcrypt.compare(q.body.password || '', a.password)))
     return s.status(401).json({ message: 'Wrong email or password' });
-  const token = jwt.sign({ id: a._id }, process.env.JWT_SECRET, { expiresIn: '8h' });
-  s.cookie('token', token, { httpOnly: true, secure: prod, sameSite: prod ? 'none' : 'lax', maxAge: 8 * 3600e3 });
+  const token = jwt.sign({ id: a._id, role: 'admin' }, process.env.JWT_SECRET, { expiresIn: '8h' });
+  s.cookie('token', token, { ...cookieOpts, maxAge: 8 * 3600e3 });
   s.json({ ok: true });
 }));
-r.post('/auth/logout', (_q, s) => { s.clearCookie('token'); s.json({ ok: true }); });
+r.post('/auth/logout', (_q, s) => { s.clearCookie('token', cookieOpts); s.json({ ok: true }); });
 r.get('/auth/me', auth, (_q, s) => s.json({ ok: true }));
+
+// ---------- customer accounts ----------
+const userFrom = (req) => {
+  try {
+    const p = jwt.verify(req.cookies.ctoken, process.env.JWT_SECRET);
+    return p.role === 'customer' ? p : null;
+  } catch { return null; }
+};
+const startSession = (s, u) => {
+  const token = jwt.sign({ id: u._id, role: 'customer' }, process.env.JWT_SECRET, { expiresIn: '7d' });
+  s.cookie('ctoken', token, { ...cookieOpts, maxAge: 7 * 24 * 3600e3 });
+};
+
+r.post('/user/register', authLimit,
+  body('name').trim().notEmpty().withMessage('Name is required').isLength({ max: 80 }).escape(),
+  body('email').isEmail().withMessage('Enter a valid email').normalizeEmail(),
+  body('password').isLength({ min: 8, max: 72 }).withMessage('Password must be 8 to 72 characters'),
+  check, wrap(async (q, s) => {
+    const { name, email, password } = q.body;
+    if (await User.findOne({ email })) return s.status(409).json({ message: 'An account with this email already exists' });
+    let u;
+    try { u = await User.create({ name, email, password: await bcrypt.hash(password, 12) }); }
+    catch (e) {
+      if (e.code === 11000) return s.status(409).json({ message: 'An account with this email already exists' });
+      throw e;
+    }
+    startSession(s, u);
+    s.status(201).json({ user: { name: u.name, email: u.email } });
+  }));
+
+r.post('/user/login', authLimit,
+  body('email').isEmail().withMessage('Enter a valid email').normalizeEmail(),
+  body('password').notEmpty().withMessage('Enter your password'),
+  check, wrap(async (q, s) => {
+    const u = await User.findOne({ email: q.body.email });
+    if (!u || !(await bcrypt.compare(q.body.password, u.password)))
+      return s.status(401).json({ message: 'Wrong email or password' });
+    startSession(s, u);
+    s.json({ user: { name: u.name, email: u.email } });
+  }));
+
+r.post('/user/logout', (_q, s) => { s.clearCookie('ctoken', cookieOpts); s.json({ ok: true }); });
+
+r.get('/user/me', wrap(async (q, s) => {
+  const p = userFrom(q);
+  const u = p ? await User.findById(p.id).select('name email') : null;
+  s.json({ user: u ? { name: u.name, email: u.email } : null });
+}));
 
 // ---------- public ----------
 r.get('/content', wrap(async (_q, s) => s.json({

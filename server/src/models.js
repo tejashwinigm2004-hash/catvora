@@ -3,6 +3,12 @@ const { Schema, model } = mongoose;
 const t = { timestamps: true };
 
 export const Admin = model('Admin', new Schema({ email: { type: String, unique: true }, password: String }, t));
+// Customer accounts (separate from Admin so the admin login is untouched)
+export const User = model('User', new Schema({
+  name: String,
+  email: { type: String, unique: true, lowercase: true },
+  password: String,
+}, t));
 export const Lead = model('Lead', new Schema({
   name: String, email: String, phone: String, service: String, message: String,
   type: { type: String, enum: ['contact', 'quote'], default: 'contact' },
