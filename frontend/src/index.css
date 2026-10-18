@@ -1,0 +1,35 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body { @apply bg-paper font-sans text-ink antialiased; }
+  h1, h2, h3 { @apply font-display font-semibold tracking-tight; }
+  :focus-visible { @apply outline outline-2 outline-offset-2 outline-ink; }
+}
+
+@layer components {
+  /* buttons: colour unchanged (orange) */
+  .btn { @apply inline-flex items-center justify-center gap-2 rounded-full border border-accent bg-accent px-6 py-3 font-semibold text-ink transition hover:-translate-y-0.5 hover:bg-accent2 hover:shadow-md; }
+  .btn-ghost { @apply inline-flex items-center justify-center gap-2 rounded-full border border-ink/15 bg-white px-6 py-3 font-semibold text-ink transition hover:bg-paper; }
+  .field { @apply w-full rounded-xl border border-ink/15 bg-white px-4 py-3 outline-none transition focus:border-cobalt; }
+}
+
+/* ---- Microsoft-style look on every page ---- */
+
+/* full-width strips (Services, About) become light grey bands */
+section.bg-white { background-color: #F2F2F2; }
+
+/* cards: white, hairline border, very soft shadow */
+.bg-leaf,
+.bg-white[class*="rounded-"] {
+  border: 1px solid #E6E6E6;
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.06);
+}
+
+/* smaller, cleaner corners on cards and panels */
+.rounded-3xl, .rounded-2xl { border-radius: 0.5rem; }
+
+@media (prefers-reduced-motion: reduce) {
+  * { animation: none !important; transition: none !important; }
+}
