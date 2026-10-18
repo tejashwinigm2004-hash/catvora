@@ -1,11 +1,12 @@
 import { Router } from 'express';
+import mongoose from 'mongoose';
 import rateLimit from 'express-rate-limit';
 import { body, validationResult } from 'express-validator';
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
 import multer from 'multer';
 import { v2 as cloudinary } from 'cloudinary';
-import { Admin, User, Lead, Booking, Ad, Service, Member } from './models.js';
+import { Admin, User, Lead, Booking, Ad, Service, Member, Project, Message, Invoice, STAGES } from './models.js';
 import { notify } from './mail.js';
 console.log('routes.js: user routes loaded');
 const r = Router();
@@ -17,6 +18,12 @@ const check = (req, res, next) => {
   return e.isEmpty() ? next() : res.status(422).json({ message: e.array()[0].msg });
 };
 const wrap = (fn) => (q, s, n) => fn(q, s, n).catch(n);
+const pick = (o, keys) => Object.fromEntries(keys.filter((k) => o[k] !== undefined).map((k) => [k, o[k]]));
+
+// A bad id in a URL should be a clear 400, not a server crash
+const badId = (_q, s, n, v) => (mongoose.isValidObjectId(v) ? n() : s.status(400).json({ message: 'Bad id' }));
+r.param('id', badId);
+r.param('userId', badId);
 
 // ---------- auth ----------
 const prod = process.env.NODE_ENV === 'production';
@@ -48,6 +55,12 @@ const userFrom = (req) => {
     const p = jwt.verify(req.cookies.ctoken, process.env.JWT_SECRET);
     return p.role === 'customer' ? p : null;
   } catch { return null; }
+};
+const cauth = (q, s, n) => {
+  const p = userFrom(q);
+  if (!p) return s.status(401).json({ message: 'Please sign in' });
+  q.user = p;
+  n();
 };
 const startSession = (s, u) => {
   const token = jwt.sign({ id: u._id, role: 'customer' }, process.env.JWT_SECRET, { expiresIn: '7d' });
@@ -90,6 +103,65 @@ r.get('/user/me', wrap(async (q, s) => {
   s.json({ user: u ? { name: u.name, email: u.email } : null });
 }));
 
+// ---------- customer dashboard (every query is limited to the signed-in customer) ----------
+const overdue = (i) => {
+  const o = i.toObject ? i.toObject() : i;
+  return { ...o, status: o.status === 'due' && o.dueDate && o.dueDate < new Date() ? 'overdue' : o.status };
+};
+
+r.get('/user/summary', cauth, wrap(async (q, s) => {
+  const user = new mongoose.Types.ObjectId(q.user.id);
+  const [upcoming, projects, unread, openLeads, inv] = await Promise.all([
+    Booking.countDocuments({ user, date: { $gte: new Date() }, status: { $in: ['pending', 'confirmed'] } }),
+    Project.countDocuments({ user, status: 'active' }),
+    Message.countDocuments({ user, from: 'team', readByCustomer: false }),
+    Lead.countDocuments({ user, status: { $nin: ['won', 'lost'] } }),
+    Invoice.aggregate([{ $match: { user, status: 'due' } }, { $group: { _id: null, n: { $sum: 1 }, total: { $sum: '$amount' } } }]),
+  ]);
+  s.json({ upcomingBookings: upcoming, activeProjects: projects, unreadMessages: unread, openEnquiries: openLeads,
+    invoicesDue: inv[0]?.n || 0, amountDue: inv[0]?.total || 0 });
+}));
+
+r.get('/user/leads', cauth, wrap(async (q, s) => s.json(await Lead.find({ user: q.user.id }).sort('-createdAt'))));
+r.get('/user/bookings', cauth, wrap(async (q, s) => s.json(await Booking.find({ user: q.user.id }).sort('-date'))));
+r.get('/user/projects', cauth, wrap(async (q, s) => s.json(await Project.find({ user: q.user.id }).sort('-updatedAt'))));
+r.get('/user/invoices', cauth, wrap(async (q, s) => s.json((await Invoice.find({ user: q.user.id }).sort('-createdAt')).map(overdue))));
+r.get('/user/invoices/:id', cauth, wrap(async (q, s) => {
+  const i = await Invoice.findOne({ _id: q.params.id, user: q.user.id }).populate('project', 'title');
+  return i ? s.json(overdue(i)) : s.status(404).json({ message: 'Invoice not found' });
+}));
+
+// cancel or reschedule your own upcoming booking
+r.patch('/user/bookings/:id', cauth, wrap(async (q, s) => {
+  const b = await Booking.findOne({ _id: q.params.id, user: q.user.id });
+  if (!b) return s.status(404).json({ message: 'Booking not found' });
+  if (!['pending', 'confirmed'].includes(b.status)) return s.status(409).json({ message: 'This booking can no longer be changed' });
+  if (q.body.action === 'cancel') b.status = 'cancelled';
+  else if (q.body.date) {
+    const d = new Date(q.body.date);
+    if (isNaN(d) || d <= new Date()) return s.status(422).json({ message: 'Pick a future date and time' });
+    b.date = d; b.status = 'pending';
+  } else return s.status(400).json({ message: 'Nothing to change' });
+  await b.save();
+  notify(`Booking ${b.status === 'cancelled' ? 'cancelled' : 'rescheduled'}: ${b.name}`, `${b.name} <${b.email}>\nNow: ${b.date}\nStatus: ${b.status}`);
+  s.json(b);
+}));
+
+// messages with the team
+r.get('/user/messages', cauth, wrap(async (q, s) => {
+  const list = await Message.find({ user: q.user.id }).sort('createdAt');
+  await Message.updateMany({ user: q.user.id, from: 'team', readByCustomer: false }, { readByCustomer: true });
+  s.json(list);
+}));
+r.post('/user/messages', cauth, authLimit,
+  body('text').trim().notEmpty().withMessage('Write a message').isLength({ max: 2000 }).withMessage('Message is too long').escape(),
+  check, wrap(async (q, s) => {
+    const m = await Message.create({ user: q.user.id, from: 'customer', text: q.body.text, readByCustomer: true });
+    const u = await User.findById(q.user.id).select('name email');
+    notify(`New message from ${u?.name}`, `${u?.name} <${u?.email}>\n\n${q.body.text}`);
+    s.status(201).json(m);
+  }));
+
 // ---------- public ----------
 r.get('/content', wrap(async (_q, s) => s.json({
   ads: await Ad.find({ active: true }).sort('order'),
@@ -97,6 +169,7 @@ r.get('/content', wrap(async (_q, s) => s.json({
   team: await Member.find().sort('order'),
 })));
 
+// If the visitor is signed in as a customer, their enquiry or booking is linked to their account
 r.post('/leads', strict,
   body('name').trim().notEmpty().withMessage('Name is required').escape(),
   body('email').isEmail().withMessage('Enter a valid email').normalizeEmail(),
@@ -106,7 +179,7 @@ r.post('/leads', strict,
   body('type').optional().isIn(['contact', 'quote']),
   check, wrap(async (q, s) => {
     const { name, email, phone, service, message, type } = q.body;
-    await Lead.create({ name, email, phone, service, message, type });
+    await Lead.create({ name, email, phone, service, message, type, user: userFrom(q)?.id });
     notify(`New ${type || 'contact'} enquiry: ${name}`, `${name} <${email}> ${phone || ''}\nService: ${service || '-'}\n\n${message}`, email);
     s.status(201).json({ ok: true });
   }));
@@ -119,7 +192,7 @@ r.post('/bookings', strict,
   body('note').optional({ values: 'falsy' }).trim().isLength({ max: 1000 }).escape(),
   check, wrap(async (q, s) => {
     const { name, email, phone, date, note } = q.body;
-    await Booking.create({ name, email, phone, date, note });
+    await Booking.create({ name, email, phone, date, note, user: userFrom(q)?.id });
     notify(`New call booking: ${name}`, `${name} <${email}> ${phone}\nWhen: ${date}\n${note || ''}`, email);
     s.status(201).json({ ok: true });
   }));
@@ -132,6 +205,108 @@ for (const [path, M, sort] of [['leads', Lead, '-createdAt'], ['bookings', Booki
   r.put(`/admin/${path}/:id`, auth, wrap(async (q, s) => s.json(await M.findByIdAndUpdate(q.params.id, q.body, { new: true }))));
   r.delete(`/admin/${path}/:id`, auth, wrap(async (q, s) => { await M.findByIdAndDelete(q.params.id); s.json({ ok: true }); }));
 }
+
+// numbers for the admin overview
+r.get('/admin/stats', auth, wrap(async (_q, s) => {
+  const since = new Date(Date.now() - 29 * 864e5); since.setHours(0, 0, 0, 0);
+  const [newLeads, pendingBookings, customers, unread, due, perDay] = await Promise.all([
+    Lead.countDocuments({ status: 'new' }),
+    Booking.countDocuments({ status: 'pending' }),
+    User.countDocuments(),
+    Message.countDocuments({ from: 'customer', readByTeam: false }),
+    Invoice.aggregate([{ $match: { status: 'due' } }, { $group: { _id: null, n: { $sum: 1 }, total: { $sum: '$amount' } } }]),
+    Lead.aggregate([{ $match: { createdAt: { $gte: since } } },
+      { $group: { _id: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt' } }, n: { $sum: 1 } } }, { $sort: { _id: 1 } }]),
+  ]);
+  s.json({ newLeads, pendingBookings, customers, unreadMessages: unread, invoicesDue: due[0]?.n || 0, amountDue: due[0]?.total || 0,
+    leadsPerDay: perDay.map((d) => ({ day: d._id, count: d.n })) });
+}));
+
+// CSV export of leads or bookings (cells starting with = + - @ are neutralised so Excel cannot run them as formulas)
+const cell = (v) => {
+  let x = v == null ? '' : v instanceof Date ? v.toISOString() : String(v);
+  if (/^[=+\-@\t\r]/.test(x)) x = `'${x}`;
+  return `"${x.replace(/"/g, '""')}"`;
+};
+r.get('/admin/export/:type', auth, wrap(async (q, s) => {
+  const cfg = {
+    leads: [Lead, ['createdAt', 'name', 'email', 'phone', 'service', 'type', 'status', 'message']],
+    bookings: [Booking, ['date', 'name', 'email', 'phone', 'status', 'note']],
+  }[q.params.type];
+  if (!cfg) return s.status(404).json({ message: 'Unknown export' });
+  const rows = await cfg[0].find().sort('-createdAt').lean();
+  const csv = [cfg[1].join(','), ...rows.map((row) => cfg[1].map((k) => cell(row[k])).join(','))].join('\n');
+  s.type('text/csv').attachment(`${q.params.type}.csv`).send(csv);
+}));
+
+r.get('/admin/customers', auth, wrap(async (_q, s) => s.json(await User.find().select('name email createdAt').sort('-createdAt'))));
+
+// projects and progress updates
+r.get('/admin/projects', auth, wrap(async (_q, s) => s.json(await Project.find().sort('-updatedAt').populate('user', 'name email'))));
+r.post('/admin/projects', auth, wrap(async (q, s) => {
+  if (!mongoose.isValidObjectId(q.body.user) || !(await User.exists({ _id: q.body.user }))) return s.status(422).json({ message: 'Choose a customer' });
+  if (!String(q.body.title || '').trim()) return s.status(422).json({ message: 'Give the project a title' });
+  s.status(201).json(await Project.create(pick(q.body, ['user', 'title', 'service', 'stage', 'progress', 'dueDate'])));
+}));
+r.put('/admin/projects/:id', auth, wrap(async (q, s) =>
+  s.json(await Project.findByIdAndUpdate(q.params.id, pick(q.body, ['title', 'service', 'stage', 'progress', 'status', 'dueDate']), { new: true, runValidators: true }))));
+r.delete('/admin/projects/:id', auth, wrap(async (q, s) => { await Project.findByIdAndDelete(q.params.id); s.json({ ok: true }); }));
+r.post('/admin/projects/:id/updates', auth, wrap(async (q, s) => {
+  const text = String(q.body.text || '').trim().slice(0, 1000);
+  if (!text) return s.status(422).json({ message: 'Write the update' });
+  const p = await Project.findById(q.params.id);
+  if (!p) return s.status(404).json({ message: 'Project not found' });
+  if (STAGES.includes(q.body.stage)) p.stage = q.body.stage;
+  if (q.body.progress != null) p.progress = Math.max(0, Math.min(100, Number(q.body.progress) || 0));
+  p.updates.push({ text, stage: p.stage, progress: p.progress });
+  await p.save();
+  s.json(p);
+}));
+
+// invoices: records the team creates and customers view (no online payment)
+const invStatus = (i) => ({ ...i.toObject(), status: i.status === 'due' && i.dueDate && i.dueDate < new Date() ? 'overdue' : i.status });
+r.get('/admin/invoices', auth, wrap(async (_q, s) =>
+  s.json((await Invoice.find().sort('-createdAt').populate('user', 'name email')).map(invStatus))));
+r.post('/admin/invoices', auth, wrap(async (q, s) => {
+  const { user, project, items = [], dueDate, note } = q.body;
+  if (!mongoose.isValidObjectId(user) || !(await User.exists({ _id: user }))) return s.status(422).json({ message: 'Choose a customer' });
+  const clean = (Array.isArray(items) ? items : []).filter((i) => i.description && Number(i.amount) > 0)
+    .map((i) => ({ description: String(i.description).slice(0, 200), amount: Number(i.amount) }));
+  if (!clean.length) return s.status(422).json({ message: 'Add at least one item with an amount' });
+  const last = await Invoice.findOne().sort('-seq').select('seq');
+  const seq = (last?.seq || 0) + 1;
+  const inv = await Invoice.create({ user, project: mongoose.isValidObjectId(project) ? project : undefined, items: clean,
+    amount: clean.reduce((a, i) => a + i.amount, 0), dueDate, note: String(note || '').slice(0, 500), seq, number: `INV-${String(seq).padStart(4, '0')}` });
+  s.status(201).json(inv);
+}));
+r.patch('/admin/invoices/:id/status', auth, wrap(async (q, s) => {
+  if (!['due', 'paid'].includes(q.body.status)) return s.status(422).json({ message: 'Status must be due or paid' });
+  const inv = await Invoice.findByIdAndUpdate(q.params.id, { status: q.body.status, paidAt: q.body.status === 'paid' ? new Date() : null }, { new: true });
+  return inv ? s.json(inv) : s.status(404).json({ message: 'Invoice not found' });
+}));
+r.delete('/admin/invoices/:id', auth, wrap(async (q, s) => { await Invoice.findByIdAndDelete(q.params.id); s.json({ ok: true }); }));
+
+// messages: conversations list, one thread, reply
+r.get('/admin/messages', auth, wrap(async (_q, s) => {
+  const rows = await Message.aggregate([{ $sort: { createdAt: -1 } },
+    { $group: { _id: '$user', last: { $first: '$text' }, at: { $first: '$createdAt' },
+      unread: { $sum: { $cond: [{ $and: [{ $eq: ['$from', 'customer'] }, { $eq: ['$readByTeam', false] }] }, 1, 0] } } } },
+    { $sort: { at: -1 } }]);
+  const users = await User.find({ _id: { $in: rows.map((x) => x._id) } }).select('name email');
+  const byId = Object.fromEntries(users.map((u) => [String(u._id), u]));
+  s.json(rows.map((x) => ({ user: byId[String(x._id)] || { _id: x._id, name: 'Deleted customer' }, last: x.last, at: x.at, unread: x.unread })));
+}));
+r.get('/admin/messages/:userId', auth, wrap(async (q, s) => {
+  const list = await Message.find({ user: q.params.userId }).sort('createdAt');
+  await Message.updateMany({ user: q.params.userId, from: 'customer', readByTeam: false }, { readByTeam: true });
+  s.json(list);
+}));
+r.post('/admin/messages/:userId', auth,
+  body('text').trim().notEmpty().withMessage('Write a reply').isLength({ max: 2000 }).escape(), check,
+  wrap(async (q, s) => {
+    if (!(await User.exists({ _id: q.params.userId }))) return s.status(404).json({ message: 'Customer not found' });
+    s.status(201).json(await Message.create({ user: q.params.userId, from: 'team', text: q.body.text, readByTeam: true }));
+  }));
 
 cloudinary.config({ cloud_name: process.env.CLOUDINARY_CLOUD_NAME, api_key: process.env.CLOUDINARY_API_KEY, api_secret: process.env.CLOUDINARY_API_SECRET });
 const up = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 },
