@@ -4,9 +4,9 @@ import { FaWhatsapp } from 'react-icons/fa';
 import { FiShield, FiTag, FiPhone, FiLayers, FiSliders, FiUsers, FiMail, FiChevronRight } from 'react-icons/fi';
 import Hero from '../components/Hero.jsx';
 import Seo from '../components/Seo.jsx';
-import ServiceIcon from '../components/ServiceIcon.jsx';
 import ProjectEstimator from '../components/ProjectEstimator.jsx';
 import FeatureCards from '../components/FeatureCards.jsx'; // added
+import { CardVisual, pickVisual } from '../components/ServiceVisuals.jsx';
 import { Reveal, Stagger } from '../components/motion/Reveal.jsx';
 import { useContent } from '../api.js';
 import { CONFIG } from '../config.js';
@@ -73,21 +73,24 @@ export default function Home() {
             <h2 className="mt-2 max-w-2xl text-3xl sm:text-4xl">Everything your business needs to run and grow on technology</h2>
           </Reveal>
           <div className="mt-10 grid gap-5 lg:grid-cols-6">
-            {services.map((s, i) => (
-              <Reveal key={s._id} delay={(i % 3) * 0.08} className={i < 2 ? 'lg:col-span-3' : 'lg:col-span-2'}>
-                <div className="flex h-full flex-col overflow-hidden rounded-lg bg-leaf transition duration-300 hover:-translate-y-1 hover:shadow-xl">
-                  <div className="grid h-40 place-items-center bg-mist text-ink"><ServiceIcon name={s.icon} size={56} /></div>
-                  <div className="flex flex-1 flex-col p-6">
-                    <h3 className="text-2xl">{s.title}</h3>
-                    <p className="mt-2 flex-1 text-ink/70">{s.summary}</p>
-                    <button onClick={() => go(`/contact?service=${encodeURIComponent(s.title)}`)}
-                      className="mt-5 inline-flex items-center gap-1 self-start font-semibold text-cobalt hover:underline">
-                      Request a quote <FiChevronRight />
-                    </button>
+            {services.map((s, i) => {
+              const Visual = pickVisual(s.title);
+              return (
+                <Reveal key={s._id} delay={(i % 3) * 0.08} className={i < 2 ? 'lg:col-span-3' : 'lg:col-span-2'}>
+                  <div className="group flex h-full flex-col overflow-hidden rounded-lg bg-leaf transition duration-300 hover:-translate-y-1 hover:shadow-xl">
+                    <CardVisual><Visual /></CardVisual>
+                    <div className="flex flex-1 flex-col p-6">
+                      <h3 className="text-2xl">{s.title}</h3>
+                      <p className="mt-2 flex-1 text-ink/70">{s.summary}</p>
+                      <button onClick={() => go(`/contact?service=${encodeURIComponent(s.title)}`)}
+                        className="mt-5 inline-flex items-center gap-1 self-start font-semibold text-cobalt hover:underline">
+                        Request a quote <FiChevronRight />
+                      </button>
+                    </div>
                   </div>
-                </div>
-              </Reveal>
-            ))}
+                </Reveal>
+              );
+            })}
           </div>
           <Reveal><button className="btn mt-8" onClick={() => go('/services')}>View all services</button></Reveal>
         </div>
