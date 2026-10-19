@@ -13,17 +13,16 @@ const app = express();
 app.set('trust proxy', 1);
 
 // Allow several origins, separated by commas in CLIENT_URL
-const allowedOrigins = (process.env.CLIENT_URL || 'http://localhost:5173')
-  .split(',')
-  .map((s) => s.trim().replace(/\/$/, '')); // trim spaces and trailing slash
+const allowedOrigins = [
+  'http://localhost:5173',
+  'https://catvora.vercel.app',
+  ...(process.env.CLIENT_URL || '')
+    .split(',')
+    .map((s) => s.trim().replace(/\/$/, ''))
+    .filter(Boolean),
+];
 
-app.use(
-  cors({
-    origin: allowedOrigins,
-    credentials: true,
-  })
-);
-
+app.use(cors({ origin: allowedOrigins, credentials: true }));
 app.use(
   helmet(),
   compression(),
