@@ -11,6 +11,9 @@ export const User = model('User', new Schema({
   password: String,
   // the owner can promote a customer to admin from the admin panel
   role: { type: String, enum: ['customer', 'admin'], default: 'customer' },
+  // forgot password: only a hash of the emailed token is stored
+  resetTokenHash: String,
+  resetExpires: Date,
 }, t));
 export const Lead = model('Lead', new Schema({
   user: ref('User'),

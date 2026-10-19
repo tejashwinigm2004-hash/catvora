@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import { Router } from 'express';
 import mongoose from 'mongoose';
 import rateLimit from 'express-rate-limit';
@@ -8,6 +9,7 @@ import multer from 'multer';
 import { v2 as cloudinary } from 'cloudinary';
 import { Admin, User, Lead, Booking, Ad, Service, Member, Project, Message, Invoice, STAGES } from './models.js';
 import { notify } from './mail.js';
+import { sendMail } from './sendMail.js';
 console.log('routes.js: user routes loaded');
 const r = Router();
 const strict = rateLimit({ windowMs: 15 * 60 * 1000, limit: 10 });
@@ -142,6 +144,39 @@ r.patch('/user/password', cauth, authLimit,
     if (!u || !(await bcrypt.compare(String(q.body.currentPassword || ''), u.password)))
       return s.status(401).json({ message: 'Current password is wrong' });
     u.password = await bcrypt.hash(q.body.newPassword, 12);
+    await u.save();
+    s.json({ ok: true });
+  }));
+
+// forgot password: always answers the same, so nobody can find out which emails have accounts
+r.post('/user/forgot-password', authLimit,
+  body('email').isEmail().withMessage('Enter a valid email').normalizeEmail(),
+  check, wrap(async (q, s) => {
+    const u = await User.findOne({ email: q.body.email });
+    if (u) {
+      const token = crypto.randomBytes(32).toString('hex');
+      u.resetTokenHash = crypto.createHash('sha256').update(token).digest('hex');
+      u.resetExpires = new Date(Date.now() + 60 * 60 * 1000); // 1 hour
+      await u.save();
+      const site = (process.env.CLIENT_URL || 'http://localhost:5173').split(',')[0].trim().replace(/\/$/, '');
+      try {
+        await sendMail(u.email, 'Reset your CATVORA password',
+          `Hi,\n\nUse this link to set a new password. It works for 1 hour:\n${site}/reset-password?token=${token}\n\nIf you did not ask for this, you can ignore this email.`);
+      } catch (e) { console.error('reset mail failed', e); }
+    }
+    s.json({ ok: true });
+  }));
+
+// reset password with the emailed token
+r.post('/user/reset-password', authLimit,
+  body('newPassword').isLength({ min: 8, max: 72 }).withMessage('Password must be 8 to 72 characters'),
+  check, wrap(async (q, s) => {
+    const hash = crypto.createHash('sha256').update(String(q.body.token || '')).digest('hex');
+    const u = await User.findOne({ resetTokenHash: hash, resetExpires: { $gt: new Date() } });
+    if (!u) return s.status(400).json({ message: 'This reset link is invalid or has expired. Please request a new one.' });
+    u.password = await bcrypt.hash(q.body.newPassword, 12);
+    u.resetTokenHash = undefined;
+    u.resetExpires = undefined;
     await u.save();
     s.json({ ok: true });
   }));

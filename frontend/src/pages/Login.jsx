@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { Link, Navigate, useNavigate } from 'react-router-dom';
+import { FiEye, FiEyeOff } from 'react-icons/fi';
 import toast from 'react-hot-toast';
 import Seo from '../components/Seo.jsx';
 import { api } from '../api.js';
@@ -10,6 +11,7 @@ export default function Login() {
   const go = useNavigate();
   const [f, setF] = useState({ email: '', password: '' });
   const [busy, setBusy] = useState(false);
+  const [show, setShow] = useState(false);
 
   if (user) return <Navigate to={user.role === 'admin' ? '/admin' : '/account'} replace />;
 
@@ -41,14 +43,39 @@ export default function Login() {
       <form onSubmit={submit} className="w-full max-w-md space-y-4 rounded-2xl bg-white p-6 shadow-sm sm:p-8">
         <h1 className="text-2xl font-semibold sm:text-3xl">Sign in</h1>
         <p className="text-ink/70">Welcome back. Enter your details to continue.</p>
+
         <label className="block text-sm font-semibold">Email
           <input className="field mt-1" type="email" autoComplete="email" required value={f.email}
             onChange={(e) => setF({ ...f, email: e.target.value })} />
         </label>
-        <label className="block text-sm font-semibold">Password
-          <input className="field mt-1" type="password" autoComplete="current-password" required value={f.password}
-            onChange={(e) => setF({ ...f, password: e.target.value })} />
-        </label>
+
+        <div>
+          <div className="flex items-center justify-between">
+            <label htmlFor="login-password" className="text-sm font-semibold">Password</label>
+            <Link to="/forgot-password" className="text-sm font-semibold text-cobalt hover:underline">Forgot password?</Link>
+          </div>
+          <div className="relative mt-1">
+            <input
+              id="login-password"
+              className="field !pr-12"
+              type={show ? 'text' : 'password'}
+              autoComplete="current-password"
+              required
+              value={f.password}
+              onChange={(e) => setF({ ...f, password: e.target.value })}
+            />
+            <button
+              type="button"
+              onClick={() => setShow((s) => !s)}
+              aria-label={show ? 'Hide password' : 'Show password'}
+              aria-pressed={show}
+              className="absolute right-2 top-1/2 grid h-9 w-9 -translate-y-1/2 place-items-center rounded-full text-ink/60 hover:bg-black/5 hover:text-ink"
+            >
+              {show ? <FiEyeOff size={20} /> : <FiEye size={20} />}
+            </button>
+          </div>
+        </div>
+
         <button className="btn w-full" disabled={busy}>{busy ? 'Signing in...' : 'Sign in'}</button>
         <p className="text-center text-sm text-ink/70">
           New here? <Link to="/register" className="font-semibold text-cobalt hover:underline">Create an account</Link>

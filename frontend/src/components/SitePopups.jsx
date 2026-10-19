@@ -6,10 +6,11 @@ import { useAuth } from '../auth.jsx';
 import { useContent } from '../api.js';
 import { CONFIG } from '../config.js';
 
-const GUEST_DELAY_MS = 20000;            // signed-out visitors: sign up popup every 20 seconds
-const MEMBER_DELAY_MS = 60000;           // signed-in users: one popup every 1 minute
+const GUEST_DELAY_MS = 20000;              // signed-out visitors: sign up popup every 20 seconds
+const MEMBER_DELAY_MS = 60000;             // signed-in users: one popup every 1 minute
 const MEMBER_ORDER = ['services', 'book']; // they take turns
-const NEW_USER_DAYS = 30;                // only users who joined in the last 30 days. Set 0 to show to everyone
+const NEW_USER_DAYS = 30;                  // only users who joined in the last 30 days. Set 0 to show to everyone
+const AUTH_PAGES = ['/login', '/register', '/forgot-password', '/reset-password'];
 
 const openBooking = () => window.dispatchEvent(new Event('open-booking'));
 
@@ -21,7 +22,7 @@ export default function SitePopups() {
   const [current, setCurrent] = useState(null); // null | 'signup' | 'services' | 'book'
   const [turn, setTurn] = useState(0);
 
-  const onAuthPage = pathname === '/login' || pathname === '/register';
+  const onAuthPage = AUTH_PAGES.includes(pathname);
   const isGuest = user === null;
   const isMember = !!user && user.role !== 'admin';
 
@@ -49,7 +50,7 @@ export default function SitePopups() {
     }
   }, [isGuest, isNewUser, current, onAuthPage, turn]);
 
-  // Remove a popup that no longer fits (just signed in, or opened sign in / register)
+  // Remove a popup that no longer fits (just signed in, or opened an account page)
   useEffect(() => {
     if (onAuthPage) return setCurrent(null);
     if (current === 'signup' && !isGuest) setCurrent(null);
