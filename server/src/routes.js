@@ -11,7 +11,6 @@ import { notify } from './mail.js';
 console.log('routes.js: user routes loaded');
 const r = Router();
 const strict = rateLimit({ windowMs: 15 * 60 * 1000, limit: 10 });
-// separate limiter for customer sign in / register, so it does not use up the quota of forms
 const authLimit = rateLimit({ windowMs: 15 * 60 * 1000, limit: 20 });
 const check = (req, res, next) => {
   const e = validationResult(req);
@@ -20,7 +19,6 @@ const check = (req, res, next) => {
 const wrap = (fn) => (q, s, n) => fn(q, s, n).catch(n);
 const pick = (o, keys) => Object.fromEntries(keys.filter((k) => o[k] !== undefined).map((k) => [k, o[k]]));
 
-// A bad id in a URL should be a clear 400, not a server crash
 const badId = (_q, s, n, v) => (mongoose.isValidObjectId(v) ? n() : s.status(400).json({ message: 'Bad id' }));
 r.param('id', badId);
 r.param('userId', badId);
@@ -29,15 +27,33 @@ r.param('userId', badId);
 const prod = process.env.NODE_ENV === 'production';
 const cookieOpts = { httpOnly: true, secure: prod, sameSite: prod ? 'none' : 'lax' };
 
-// Admin only: the token must carry role "admin", so a customer token can never open /admin routes
-const auth = (req, res, next) => {
+const userFrom = (req) => {
   try {
-    const p = jwt.verify(req.cookies.token, process.env.JWT_SECRET);
-    if (p.role !== 'admin') throw new Error('not admin');
-    req.admin = p;
-    next();
-  } catch { res.status(401).json({ message: 'Please sign in' }); }
+    const p = jwt.verify(req.cookies.ctoken, process.env.JWT_SECRET);
+    return p.role === 'customer' ? p : null;
+  } catch { return null; }
 };
+
+// Admin access = the owner (Admin account) OR a customer the owner promoted
+const auth = async (req, res, next) => {
+  try {
+    if (req.cookies.token) {
+      try {
+        const p = jwt.verify(req.cookies.token, process.env.JWT_SECRET);
+        if (p.role === 'admin') { req.admin = { ...p, owner: true }; return next(); }
+      } catch {}
+    }
+    const c = userFrom(req);
+    if (c) {
+      const u = await User.findById(c.id).select('role');
+      if (u?.role === 'admin') { req.admin = { id: c.id, owner: false }; return next(); }
+    }
+    res.status(401).json({ message: 'Please sign in' });
+  } catch (e) { next(e); }
+};
+
+const ownerOnly = (q, s, n) => (q.admin?.owner ? n() : s.status(403).json({ message: 'Only the owner can do this' }));
+
 r.post('/auth/login', strict, wrap(async (q, s) => {
   const a = await Admin.findOne({ email: q.body.email });
   if (!a || !(await bcrypt.compare(q.body.password || '', a.password)))
@@ -47,15 +63,9 @@ r.post('/auth/login', strict, wrap(async (q, s) => {
   s.json({ ok: true });
 }));
 r.post('/auth/logout', (_q, s) => { s.clearCookie('token', cookieOpts); s.json({ ok: true }); });
-r.get('/auth/me', auth, (_q, s) => s.json({ ok: true }));
+r.get('/auth/me', auth, (q, s) => s.json({ ok: true, owner: !!q.admin?.owner }));
 
 // ---------- customer accounts ----------
-const userFrom = (req) => {
-  try {
-    const p = jwt.verify(req.cookies.ctoken, process.env.JWT_SECRET);
-    return p.role === 'customer' ? p : null;
-  } catch { return null; }
-};
 const cauth = (q, s, n) => {
   const p = userFrom(q);
   if (!p) return s.status(401).json({ message: 'Please sign in' });
@@ -66,6 +76,7 @@ const startSession = (s, u) => {
   const token = jwt.sign({ id: u._id, role: 'customer' }, process.env.JWT_SECRET, { expiresIn: '7d' });
   s.cookie('ctoken', token, { ...cookieOpts, maxAge: 7 * 24 * 3600e3 });
 };
+const publicUser = (u) => ({ name: u.name, email: u.email, role: u.role || 'customer', createdAt: u.createdAt });
 
 r.post('/user/register', authLimit,
   body('name').trim().notEmpty().withMessage('Name is required').isLength({ max: 80 }).escape(),
@@ -81,7 +92,7 @@ r.post('/user/register', authLimit,
       throw e;
     }
     startSession(s, u);
-    s.status(201).json({ user: { name: u.name, email: u.email } });
+    s.status(201).json({ user: publicUser(u) });
   }));
 
 r.post('/user/login', authLimit,
@@ -92,18 +103,50 @@ r.post('/user/login', authLimit,
     if (!u || !(await bcrypt.compare(q.body.password, u.password)))
       return s.status(401).json({ message: 'Wrong email or password' });
     startSession(s, u);
-    s.json({ user: { name: u.name, email: u.email } });
+    s.json({ user: publicUser(u) });
   }));
 
 r.post('/user/logout', (_q, s) => { s.clearCookie('ctoken', cookieOpts); s.json({ ok: true }); });
 
 r.get('/user/me', wrap(async (q, s) => {
   const p = userFrom(q);
-  const u = p ? await User.findById(p.id).select('name email') : null;
-  s.json({ user: u ? { name: u.name, email: u.email } : null });
+  const u = p ? await User.findById(p.id).select('name email role createdAt') : null;
+  s.json({ user: u ? publicUser(u) : null });
 }));
 
-// ---------- customer dashboard (every query is limited to the signed-in customer) ----------
+// profile: change your own name and/or email (current password required to change email)
+r.patch('/user/profile', cauth, authLimit,
+  body('name').optional().trim().notEmpty().withMessage('Name is required').isLength({ max: 80 }).escape(),
+  body('email').optional().isEmail().withMessage('Enter a valid email').normalizeEmail(),
+  check, wrap(async (q, s) => {
+    const u = await User.findById(q.user.id);
+    if (!u) return s.status(404).json({ message: 'Account not found' });
+
+    if (q.body.email && q.body.email !== u.email) {
+      if (!(await bcrypt.compare(String(q.body.currentPassword || ''), u.password)))
+        return s.status(401).json({ message: 'Enter your current password to change your email' });
+      if (await User.exists({ email: q.body.email, _id: { $ne: u._id } }))
+        return s.status(409).json({ message: 'An account with this email already exists' });
+      u.email = q.body.email;
+    }
+    if (q.body.name) u.name = q.body.name;
+    await u.save();
+    s.json({ user: publicUser(u) });
+  }));
+
+// profile: change your own password (current password required)
+r.patch('/user/password', cauth, authLimit,
+  body('newPassword').isLength({ min: 8, max: 72 }).withMessage('New password must be 8 to 72 characters'),
+  check, wrap(async (q, s) => {
+    const u = await User.findById(q.user.id);
+    if (!u || !(await bcrypt.compare(String(q.body.currentPassword || ''), u.password)))
+      return s.status(401).json({ message: 'Current password is wrong' });
+    u.password = await bcrypt.hash(q.body.newPassword, 12);
+    await u.save();
+    s.json({ ok: true });
+  }));
+
+// ---------- customer dashboard ----------
 const overdue = (i) => {
   const o = i.toObject ? i.toObject() : i;
   return { ...o, status: o.status === 'due' && o.dueDate && o.dueDate < new Date() ? 'overdue' : o.status };
@@ -131,7 +174,6 @@ r.get('/user/invoices/:id', cauth, wrap(async (q, s) => {
   return i ? s.json(overdue(i)) : s.status(404).json({ message: 'Invoice not found' });
 }));
 
-// cancel or reschedule your own upcoming booking
 r.patch('/user/bookings/:id', cauth, wrap(async (q, s) => {
   const b = await Booking.findOne({ _id: q.params.id, user: q.user.id });
   if (!b) return s.status(404).json({ message: 'Booking not found' });
@@ -147,7 +189,6 @@ r.patch('/user/bookings/:id', cauth, wrap(async (q, s) => {
   s.json(b);
 }));
 
-// messages with the team
 r.get('/user/messages', cauth, wrap(async (q, s) => {
   const list = await Message.find({ user: q.user.id }).sort('createdAt');
   await Message.updateMany({ user: q.user.id, from: 'team', readByCustomer: false }, { readByCustomer: true });
@@ -169,7 +210,6 @@ r.get('/content', wrap(async (_q, s) => s.json({
   team: await Member.find().sort('order'),
 })));
 
-// If the visitor is signed in as a customer, their enquiry or booking is linked to their account
 r.post('/leads', strict,
   body('name').trim().notEmpty().withMessage('Name is required').escape(),
   body('email').isEmail().withMessage('Enter a valid email').normalizeEmail(),
@@ -206,7 +246,6 @@ for (const [path, M, sort] of [['leads', Lead, '-createdAt'], ['bookings', Booki
   r.delete(`/admin/${path}/:id`, auth, wrap(async (q, s) => { await M.findByIdAndDelete(q.params.id); s.json({ ok: true }); }));
 }
 
-// numbers for the admin overview
 r.get('/admin/stats', auth, wrap(async (_q, s) => {
   const since = new Date(Date.now() - 29 * 864e5); since.setHours(0, 0, 0, 0);
   const [newLeads, pendingBookings, customers, unread, due, perDay] = await Promise.all([
@@ -222,7 +261,6 @@ r.get('/admin/stats', auth, wrap(async (_q, s) => {
     leadsPerDay: perDay.map((d) => ({ day: d._id, count: d.n })) });
 }));
 
-// CSV export of leads or bookings (cells starting with = + - @ are neutralised so Excel cannot run them as formulas)
 const cell = (v) => {
   let x = v == null ? '' : v instanceof Date ? v.toISOString() : String(v);
   if (/^[=+\-@\t\r]/.test(x)) x = `'${x}`;
@@ -239,9 +277,15 @@ r.get('/admin/export/:type', auth, wrap(async (q, s) => {
   s.type('text/csv').attachment(`${q.params.type}.csv`).send(csv);
 }));
 
-r.get('/admin/customers', auth, wrap(async (_q, s) => s.json(await User.find().select('name email createdAt').sort('-createdAt'))));
+r.get('/admin/customers', auth, wrap(async (_q, s) =>
+  s.json(await User.find().select('name email role createdAt').sort('-createdAt'))));
 
-// projects and progress updates
+r.patch('/admin/customers/:id/role', auth, ownerOnly, wrap(async (q, s) => {
+  if (!['customer', 'admin'].includes(q.body.role)) return s.status(422).json({ message: 'Role must be customer or admin' });
+  const u = await User.findByIdAndUpdate(q.params.id, { role: q.body.role }, { new: true }).select('name email role');
+  return u ? s.json(u) : s.status(404).json({ message: 'Customer not found' });
+}));
+
 r.get('/admin/projects', auth, wrap(async (_q, s) => s.json(await Project.find().sort('-updatedAt').populate('user', 'name email'))));
 r.post('/admin/projects', auth, wrap(async (q, s) => {
   if (!mongoose.isValidObjectId(q.body.user) || !(await User.exists({ _id: q.body.user }))) return s.status(422).json({ message: 'Choose a customer' });
@@ -263,7 +307,6 @@ r.post('/admin/projects/:id/updates', auth, wrap(async (q, s) => {
   s.json(p);
 }));
 
-// invoices: records the team creates and customers view (no online payment)
 const invStatus = (i) => ({ ...i.toObject(), status: i.status === 'due' && i.dueDate && i.dueDate < new Date() ? 'overdue' : i.status });
 r.get('/admin/invoices', auth, wrap(async (_q, s) =>
   s.json((await Invoice.find().sort('-createdAt').populate('user', 'name email')).map(invStatus))));
@@ -286,7 +329,6 @@ r.patch('/admin/invoices/:id/status', auth, wrap(async (q, s) => {
 }));
 r.delete('/admin/invoices/:id', auth, wrap(async (q, s) => { await Invoice.findByIdAndDelete(q.params.id); s.json({ ok: true }); }));
 
-// messages: conversations list, one thread, reply
 r.get('/admin/messages', auth, wrap(async (_q, s) => {
   const rows = await Message.aggregate([{ $sort: { createdAt: -1 } },
     { $group: { _id: '$user', last: { $first: '$text' }, at: { $first: '$createdAt' },

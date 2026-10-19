@@ -45,6 +45,9 @@ function Login({ onDone }) {
       <input className="field" type="email" placeholder="Email" onChange={(e) => setF({ ...f, email: e.target.value })} />
       <input className="field" type="password" placeholder="Password" onChange={(e) => setF({ ...f, password: e.target.value })} />
       <button className="btn w-full">Sign in</button>
+      <p className="text-center text-sm text-ink/70">
+        Given admin access by the owner? <a href="/login" className="font-semibold text-cobalt hover:underline">Sign in with your account</a>
+      </p>
     </form>
   );
 }
@@ -133,17 +136,48 @@ function Records({ path, cols, statuses, onChange }) {
   );
 }
 
-/* ---------- customers ---------- */
-function Customers() {
-  const [rows] = useList('/admin/customers');
+/* ---------- customers (the owner can give or remove admin access) ---------- */
+function Customers({ owner }) {
+  const [rows, load] = useList('/admin/customers');
   if (rows === null) return <p className="text-ink/60">Loading…</p>;
   if (!rows.length) return <Empty>No customers have registered yet.</Empty>;
+
+  const setRole = (u, role) => {
+    const q = role === 'admin'
+      ? `Give admin access to ${dec(u.name)}? They will be able to manage the whole website.`
+      : `Remove admin access from ${dec(u.name)}?`;
+    if (!window.confirm(q)) return;
+    return act(api.patch(`/admin/customers/${u._id}/role`, { role }), 'Saved', load);
+  };
+
   return (
-    <div className="overflow-x-auto rounded-3xl border border-ink/10 bg-white">
-      <table className="w-full text-left text-sm">
-        <thead><tr className="border-b border-ink/15"><th className="p-3">Name</th><th className="p-3">Email</th><th className="p-3">Joined</th></tr></thead>
-        <tbody>{rows.map((u) => <tr key={u._id} className="border-b border-ink/10"><td className="p-3">{dec(u.name)}</td><td className="p-3">{u.email}</td><td className="p-3">{day(u.createdAt)}</td></tr>)}</tbody>
-      </table>
+    <div className="space-y-3">
+      {!owner && <p className="rounded-2xl bg-white p-3 text-sm text-ink/70">Only the owner can give or remove admin access.</p>}
+      <div className="overflow-x-auto rounded-3xl border border-ink/10 bg-white">
+        <table className="w-full text-left text-sm">
+          <thead>
+            <tr className="border-b border-ink/15">
+              <th className="p-3">Name</th><th className="p-3">Email</th><th className="p-3">Joined</th><th className="p-3">Access</th>
+              {owner && <th className="p-3"></th>}
+            </tr>
+          </thead>
+          <tbody>{rows.map((u) => (
+            <tr key={u._id} className="border-b border-ink/10">
+              <td className="p-3">{dec(u.name)}</td>
+              <td className="p-3">{u.email}</td>
+              <td className="p-3">{day(u.createdAt)}</td>
+              <td className="p-3"><Pill t={u.role === 'admin' ? 'warn' : 'plain'}>{u.role === 'admin' ? 'Admin' : 'Customer'}</Pill></td>
+              {owner && (
+                <td className="p-3 text-right">
+                  {u.role === 'admin'
+                    ? <button className="font-semibold text-red-600" onClick={() => setRole(u, 'customer')}>Remove admin</button>
+                    : <button className="font-semibold text-cobalt" onClick={() => setRole(u, 'admin')}>Make admin</button>}
+                </td>
+              )}
+            </tr>))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
@@ -376,14 +410,24 @@ const TABS = [['overview', 'Overview'], ['leads', 'Leads'], ['bookings', 'Bookin
 
 export default function Admin() {
   const [ok, setOk] = useState(null);
+  const [owner, setOwner] = useState(false); // true only for the owner's admin account
   const [tab, setTab] = useState('overview');
   const [stats, setStats] = useState(null);
   const fail = useCallback(() => setOk(false), []);
   const loadStats = useCallback(() => api.get('/admin/stats').then((r) => setStats(r.data)).catch(() => {}), []);
-  useEffect(() => { api.get('/auth/me').then(() => setOk(true)).catch(() => setOk(false)); }, []);
+  useEffect(() => {
+    api.get('/auth/me').then((r) => { setOwner(!!r.data.owner); setOk(true); }).catch(() => setOk(false));
+  }, []);
   useEffect(() => { if (ok) loadStats(); }, [ok, tab, loadStats]);
   if (ok === null) return null;
-  if (!ok) return <Login onDone={() => setOk(true)} />;
+  if (!ok) return <Login onDone={() => { setOwner(true); setOk(true); }} />;
+
+  // clears both the owner cookie and a customer cookie, so a promoted admin is fully signed out
+  const signOut = async () => {
+    await Promise.allSettled([api.post('/auth/logout'), api.post('/user/logout')]);
+    setOk(false);
+    window.location.href = '/';
+  };
 
   const badge = { leads: stats?.newLeads, bookings: stats?.pendingBookings, invoices: stats?.invoicesDue, messages: stats?.unreadMessages };
   return (
@@ -392,7 +436,7 @@ export default function Admin() {
         <div className="flex flex-wrap items-center justify-between gap-3">
           <h1 className="text-2xl">CATVORA admin</h1>
           <div className="flex gap-4 font-semibold"><a href="/" className="text-ink/70 hover:text-cobalt">View website</a>
-            <button onClick={async () => { await api.post('/auth/logout'); setOk(false); }} className="text-cobalt">Sign out</button></div>
+            <button onClick={signOut} className="text-cobalt">Sign out</button></div>
         </div>
         <div className="my-5 flex gap-2 overflow-x-auto pb-2" role="tablist">
           {TABS.map(([id, label]) => (
@@ -404,7 +448,7 @@ export default function Admin() {
         {tab === 'overview' && <Overview s={stats} setTab={setTab} />}
         {tab === 'leads' && <Records path="leads" cols={LEAD_COLS} statuses={['new', 'contacted', 'quoted', 'won', 'lost']} onChange={loadStats} />}
         {tab === 'bookings' && <Records path="bookings" cols={BOOKING_COLS} statuses={['pending', 'confirmed', 'done', 'cancelled']} onChange={loadStats} />}
-        {tab === 'customers' && <Customers />}
+        {tab === 'customers' && <Customers owner={owner} />}
         {tab === 'projects' && <Projects />}
         {tab === 'invoices' && <Invoices onChange={loadStats} />}
         {tab === 'messages' && <Messages onChange={loadStats} />}

@@ -9,6 +9,8 @@ export const User = model('User', new Schema({
   name: String,
   email: { type: String, unique: true, lowercase: true },
   password: String,
+  // the owner can promote a customer to admin from the admin panel
+  role: { type: String, enum: ['customer', 'admin'], default: 'customer' },
 }, t));
 export const Lead = model('Lead', new Schema({
   user: ref('User'),

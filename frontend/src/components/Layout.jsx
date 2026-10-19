@@ -53,19 +53,24 @@ export default function Layout() {
             </Link>
             <div className="ml-4 hidden md:flex">
               {links.map(([to, l]) => <NavLink key={to} to={to} end className={cls}>{l}</NavLink>)}
+              {isAdmin && (
+                <NavLink to="/admin" className={cls}>
+                  <FiSettings className="mr-1.5" /> Admin
+                </NavLink>
+              )}
             </div>
           </div>
           <div className="flex items-center gap-2">
             {/* account links (desktop) */}
-            {isAdmin && (
-              <Link to="/admin" className="hidden items-center gap-2 rounded px-3 py-2 text-[15px] font-semibold hover:bg-black/5 md:inline-flex">
-                <FiSettings /> Admin
-              </Link>
-            )}
             {user ? (
-              <Link to="/account" className="hidden items-center gap-2 rounded px-3 py-2 text-[15px] font-semibold hover:bg-black/5 md:inline-flex">
-                <FiUser /> {user.name.split(' ')[0]}
-              </Link>
+              <>
+                <Link to="/account" className="hidden items-center gap-2 rounded px-3 py-2 text-[15px] font-semibold hover:bg-black/5 md:inline-flex">
+                  <FiUser /> Dashboard
+                </Link>
+                <Link to="/profile" className="hidden rounded px-3 py-2 text-[15px] text-ink/75 hover:bg-black/5 hover:text-ink md:inline-flex">
+                  Profile
+                </Link>
+              </>
             ) : user === null && (
               <>
                 <Link to="/login" className="hidden items-center gap-2 rounded px-3 py-2 text-[15px] font-semibold text-ink hover:bg-black/5 md:inline-flex">
@@ -102,7 +107,10 @@ export default function Layout() {
             {links.map(([to, l]) => <NavLink key={to} to={to} end className={mcls}>{l}</NavLink>)}
             {isAdmin && <NavLink to="/admin" className={mcls}>Admin panel</NavLink>}
             {user ? (
-              <NavLink to="/account" className={mcls}>My account</NavLink>
+              <>
+                <NavLink to="/account" className={mcls}>My dashboard</NavLink>
+                <NavLink to="/profile" className={mcls}>My profile</NavLink>
+              </>
             ) : user === null && (
               <>
                 <NavLink to="/login" className={mcls}>Sign in</NavLink>
@@ -146,6 +154,7 @@ export default function Layout() {
             {links.map(([to, l]) => (
               <div key={to}><Link to={to} className="fx-link inline-block py-1.5 text-sm text-ink/75">{l}</Link></div>
             ))}
+            <div><Link to="/admin" className="fx-link inline-block py-1.5 text-sm text-ink/75">Admin</Link></div>
           </div>
           <div className="text-sm text-ink/75">
             <p className="font-semibold text-ink">Contact</p>

@@ -1,11 +1,16 @@
 import { useEffect, useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { FiX, FiPhoneCall } from 'react-icons/fi';
+import { FaWhatsapp } from 'react-icons/fa';
 import { useAuth } from '../auth.jsx';
 import { useContent } from '../api.js';
+import { CONFIG } from '../config.js';
 
-const DELAY_MS = 20000;               // wait after each close (20 seconds)
-const ORDER = ['signup', 'services']; // popups take turns
+const GUEST_DELAY_MS = 20000;            // signed-out visitors: sign up popup every 20 seconds
+const MEMBER_DELAY_MS = 60000;           // signed-in users: one popup every 1 minute
+const MEMBER_ORDER = ['services', 'book']; // they take turns
+const NEW_USER_DAYS = 30;                // only users who joined in the last 30 days. Set 0 to show to everyone
+
 const openBooking = () => window.dispatchEvent(new Event('open-booking'));
 
 export default function SitePopups() {
@@ -13,25 +18,43 @@ export default function SitePopups() {
   const { pathname } = useLocation();
   const navigate = useNavigate();
   const { services } = useContent();
-  const [current, setCurrent] = useState(null); // null, 'signup' or 'services'
+  const [current, setCurrent] = useState(null); // null | 'signup' | 'services' | 'book'
   const [turn, setTurn] = useState(0);
 
   const onAuthPage = pathname === '/login' || pathname === '/register';
+  const isGuest = user === null;
+  const isMember = !!user && user.role !== 'admin';
 
-  // While nothing is showing, wait 20 seconds, then show the next popup in turn
-  useEffect(() => {
-    if (user !== null || current || onAuthPage) return; // only for signed-out visitors
-    const t = setTimeout(() => {
-      setCurrent(ORDER[turn % ORDER.length]);
-      setTurn((n) => n + 1);
-    }, DELAY_MS);
-    return () => clearTimeout(t);
-  }, [user, current, onAuthPage, turn]);
+  // "New user" check. If the server doesn't send createdAt, everyone signed in counts.
+  const isNewUser =
+    isMember &&
+    (!NEW_USER_DAYS ||
+      !user.createdAt ||
+      Date.now() - new Date(user.createdAt).getTime() < NEW_USER_DAYS * 86400000);
 
-  // Hide everything once they sign in or open the sign in / register page
+  // Pick the next popup after the wait, and start again whenever one is closed
   useEffect(() => {
-    if (user || onAuthPage) setCurrent(null);
-  }, [user, onAuthPage]);
+    if (current || onAuthPage) return;
+
+    if (isGuest) {
+      const t = setTimeout(() => setCurrent('signup'), GUEST_DELAY_MS);
+      return () => clearTimeout(t);
+    }
+    if (isNewUser) {
+      const t = setTimeout(() => {
+        setCurrent(MEMBER_ORDER[turn % MEMBER_ORDER.length]);
+        setTurn((n) => n + 1);
+      }, MEMBER_DELAY_MS);
+      return () => clearTimeout(t);
+    }
+  }, [isGuest, isNewUser, current, onAuthPage, turn]);
+
+  // Remove a popup that no longer fits (just signed in, or opened sign in / register)
+  useEffect(() => {
+    if (onAuthPage) return setCurrent(null);
+    if (current === 'signup' && !isGuest) setCurrent(null);
+    if ((current === 'services' || current === 'book') && !isNewUser) setCurrent(null);
+  }, [isGuest, isNewUser, onAuthPage, current]);
 
   const close = () => setCurrent(null);
 
@@ -57,7 +80,10 @@ export default function SitePopups() {
     }
   };
 
-  if (!current || user) return null;
+  if (!current) return null;
+
+  const tel = `tel:${CONFIG.phone.replace(/\s/g, '')}`;
+  const wa = `https://wa.me/${CONFIG.whatsapp}`;
 
   return (
     <div
@@ -81,6 +107,7 @@ export default function SitePopups() {
           <FiX size={22} />
         </button>
 
+        {/* 1. Sign up (signed-out visitors) */}
         {current === 'signup' && (
           <>
             <h2 className="pr-8 text-2xl font-semibold">Join CATVORA Technology</h2>
@@ -100,10 +127,11 @@ export default function SitePopups() {
           </>
         )}
 
+        {/* 2. Services (signed-in users) */}
         {current === 'services' && (
           <>
-            <h2 className="pr-8 text-2xl font-semibold">How can we help you?</h2>
-            <p className="mt-2 text-ink/70">Talk to us about any of these. The first call is free.</p>
+            <h2 className="pr-8 text-2xl font-semibold">Our services</h2>
+            <p className="mt-2 text-ink/70">Here is how we can help your business.</p>
             <ul className="mt-4 space-y-2">
               {services.slice(0, 3).map((s) => (
                 <li key={s._id} className="rounded-lg bg-mist px-4 py-3">
@@ -113,12 +141,35 @@ export default function SitePopups() {
               ))}
             </ul>
             <div className="mt-6 flex flex-col gap-3">
+              <Link to="/services" onClick={close} className="btn w-full justify-center">
+                View all services
+              </Link>
+              <button onClick={close} className="w-full rounded px-3 py-3 text-[15px] font-semibold text-ink/70 hover:bg-black/5">
+                Not now
+              </button>
+            </div>
+          </>
+        )}
+
+        {/* 3. Book a call (signed-in users) */}
+        {current === 'book' && (
+          <>
+            <h2 className="pr-8 text-2xl font-semibold">Book a call</h2>
+            <p className="mt-2 text-ink/70">
+              Tell us what you need and our team will call you back. The first call is free.
+            </p>
+            <div className="mt-6 flex flex-col gap-3">
               <button onClick={bookCall} className="btn w-full justify-center">
                 <FiPhoneCall /> Book a call
               </button>
-              <Link to="/services" onClick={close} className="w-full rounded px-3 py-3 text-center text-[15px] font-semibold text-cobalt hover:bg-black/5">
-                View all services
-              </Link>
+              <a href={wa} target="_blank" rel="noopener noreferrer" onClick={close}
+                className="flex w-full items-center justify-center gap-2 rounded px-3 py-3 text-[15px] font-semibold text-ink hover:bg-black/5">
+                <FaWhatsapp size={18} /> Chat on WhatsApp
+              </a>
+              <a href={tel} onClick={close}
+                className="w-full rounded px-3 py-3 text-center text-[15px] font-semibold text-cobalt hover:bg-black/5">
+                Call {CONFIG.phone}
+              </a>
               <button onClick={close} className="w-full rounded px-3 py-3 text-[15px] font-semibold text-ink/70 hover:bg-black/5">
                 Not now
               </button>
