@@ -6,7 +6,7 @@ import Floating from './Floating.jsx';
 import ScrollProgress from './ScrollProgress.jsx';
 import SmoothScroll from './SmoothScroll.jsx';
 import PageMotion from './PageMotion.jsx'; // replaces PageReveal and TextAnimations
-import SignupPrompt from './SignupPrompt.jsx';
+import SitePopups from './SitePopups.jsx';
 import { CONFIG } from '../config.js';
 import { useAuth } from '../auth.jsx';
 
@@ -171,7 +171,7 @@ export default function Layout() {
       </div>
 
       {isHome && <Floating />}
-      <SignupPrompt />
+      <SitePopups />
       <ScrollToTop />
       <PageMotion />
     </>
