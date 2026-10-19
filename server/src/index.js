@@ -12,7 +12,7 @@ import routes from './routes.js';
 const app = express();
 app.set('trust proxy', 1);
 
-// Allow several origins, separated by commas in CLIENT_URL
+// Allowed frontend origins (hardcoded + optional extras from CLIENT_URL)
 const allowedOrigins = [
   'http://localhost:5173',
   'https://catvora.vercel.app',
@@ -22,19 +22,34 @@ const allowedOrigins = [
     .filter(Boolean),
 ];
 
-app.use(cors({ origin: allowedOrigins, credentials: true }));
+console.log('Allowed origins:', allowedOrigins);
+
+// CORS first, so every response (even errors) carries the headers
 app.use(
-  helmet(),
+  cors({
+    origin: allowedOrigins,
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
+  })
+);
+
+app.use(
+  helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }),
   compression(),
   morgan('dev'),
   express.json({ limit: '1mb' }),
   cookieParser()
 );
 
+// Open https://catvora.onrender.com/health to confirm this version is live
+app.get('/health', (_req, res) => {
+  res.json({ ok: true, version: 'cors-fix-v3', allowedOrigins });
+});
+
 const limiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 300 });
 
-// Routes work both with and without the /api prefix, because your
-// frontend is currently calling /user/login and /content directly.
+// Routes work both with and without the /api prefix
 app.use('/api', limiter, routes);
 app.use('/', limiter, routes);
 
